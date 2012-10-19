@@ -8,6 +8,9 @@
 
 #include "xml_server.h"
 
+gchar                   g_exe_path[1024];
+gchar                   g_exe_parent_path[1024];
+
 struct global_info_stuct global_info;
 
 const GOptionEntry arg_options[] ={
@@ -119,7 +122,10 @@ xml_server_log_open(
     xml_server_log_t *      log
 ) 
 {
-    log->log_file_fd = fopen("./xml_server.log", "a+");
+    gchar       buf[2000];
+
+    sprintf(buf, "%s/xml_server.log", g_exe_path);
+    log->log_file_fd = fopen(buf, "a+");
 
     return (log->log_file_fd == NULL);
 }
@@ -142,7 +148,7 @@ xml_server_log_init()
 {
     if (xml_server_log_open(&global_log))
     {
-        g_error("can't open log file ./xml_server.log\n");
+        g_error("can't open log file %s/xml_server.log\n", g_exe_path);
     }
     global_log.log_ts_str   = g_string_new_len(NULL, 100);
     global_log.min_lvl      = G_LOG_LEVEL_CRITICAL;
@@ -396,6 +402,10 @@ xml_server_init()
 
     xml_server_log_init();
 
+#ifndef _WIN32
+    (void) signal(SIGPIPE, SIG_IGN);
+#endif
+
     return 0;
 }
 
@@ -549,6 +559,70 @@ xml_server_write_to_file(
 
 #define XML_WRITE_SIZE  (1 << 20)
 
+#ifdef _WIN32
+#define FN_LIBCHAR '\\'
+#else
+#define FN_LIBCHAR '/'
+#endif
+
+/* 返回非0表示失败 */
+int my_GetModuleFileName( char* sFileName, int nSize)
+{
+#ifdef _WIN32
+    return GetModuleFileName(NULL, sFileName, (DWORD)nSize) == 0;
+#else
+    int ret = -1;
+    char sLine[1024] = { 0 };
+    void* pSymbol = (void*)"";
+    FILE *fp;
+    char *pPath;
+
+
+    fp = fopen ("/proc/self/maps", "r");
+    if ( fp != NULL )
+    {
+        while (!feof (fp))
+        {
+            unsigned long start, end;
+
+            if ( !fgets (sLine, sizeof (sLine), fp))
+                continue;
+            if ( !strstr (sLine, " r-xp ") || !strchr (sLine, '/'))
+                continue;
+
+            /* 利用存储地址判断是否同一进程 */
+            sscanf (sLine, "%lx-%lx ", &start, &end);
+            if (pSymbol >= (void *) start && pSymbol < (void *) end)
+            {
+                char *tmp;
+                size_t len;
+
+                /* Extract the filename; it is always an absolute path */
+                pPath = strchr (sLine, '/');
+
+                /* Get rid of the newline */
+                tmp = strrchr (pPath, '\n');
+                if (tmp) *tmp = 0;
+
+                /* Get rid of "(deleted)" */
+                //len = strlen (pPath);
+                //if (len > 10 && strcmp (pPath + len - 10, " (deleted)") == 0)
+                //{
+                // tmp = pPath + len - 10;
+                // *tmp = 0;
+                //}
+                ret = 0;
+                strcpy( sFileName, pPath );
+            }
+        }
+        fclose (fp);
+
+    }
+    return ret;
+#endif
+}
+
+
 int
 xml_server_work(
     void*       user_arg                         
@@ -567,8 +641,8 @@ xml_server_work(
 
     socket  = (network_socket_t*)user_arg;
 
-    sprintf(tmp_filename, "./xml_tmp/%s_%d.log", socket->addr->name->str, (unsigned long)time(NULL));
-    sprintf(filename, "../xml_tmp/%s_%d.log", socket->addr->name->str, (unsigned long)time(NULL));
+    sprintf(tmp_filename, "%s/xml_tmp/%s_%d.log", g_exe_path, socket->addr->name->str, (unsigned long)time(NULL));
+    sprintf(filename, "%s/xml_tmp/%s_%d.log", g_exe_parent_path, socket->addr->name->str, (unsigned long)time(NULL));
 
     ret_size = XML_WRITE_SIZE;
     ret = g_new(gchar, ret_size + 1);
@@ -776,6 +850,50 @@ main(
     GThread*            listen_thread;
     network_socket_t*   listen_socket = NULL;
     //gint                i;
+
+    /* 获得进程所在位置 */
+    if (!my_GetModuleFileName(g_exe_path, 1024))
+    {
+        //exe_name
+        char *last= NULL;
+        char *end;
+
+        strcpy(g_exe_parent_path, g_exe_path);
+
+        *(strrchr(g_exe_path, FN_LIBCHAR)) = 0;
+
+
+        end= g_exe_parent_path + strlen(g_exe_parent_path) - 1;
+
+        /*
+        Look for the second-to-last \ in the filename, but hang on
+        to a pointer after the last \ in case we're in the root of
+        a drive.
+        */
+        for ( ; end > g_exe_parent_path; end--)
+        {
+            if (*end == FN_LIBCHAR)
+            {
+                if (last)
+                {
+                    /* Keep the last '\' as this works both with D:\ and a directory */
+                    end[0]= 0;
+                    break;
+                }
+                last= end;
+            }
+        }
+
+    }
+    else
+    {
+        g_error("%s, can't get module file name", G_STRLOC);
+        
+        strcpy(g_exe_path, "./");
+        strcpy(g_exe_parent_path, "../");
+    }
+
+    fprintf(stdout, "xml_server start dir %s, parent dir %s\n", g_exe_path, g_exe_parent_path);
 
     if (xml_server_init() == -1)
     {
