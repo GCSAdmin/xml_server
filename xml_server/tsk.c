@@ -104,7 +104,9 @@ tsk_dequeue()
 
     os_semaphore_p(&global_tsk_sys.sema);
 
-    g_assert(global_tsk_sys.n_idle_work_thread > 0);
+    /* 这个断言可能存在问题，当线程数未达上线，创建线程后然后空闲数++，
+    然而这个之间该线程就会执行tsk_dequeue */
+    //g_assert(global_tsk_sys.n_idle_work_thread > 0);
 
     if (tsk_queue_is_empty())
     {
