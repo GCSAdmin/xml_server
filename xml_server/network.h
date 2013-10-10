@@ -23,6 +23,7 @@
 #include <sys/un.h>         /** struct sockaddr_un */
 #endif
 #include <sys/socket.h>     /** struct sockaddr (freebsd and hp/ux need it) */
+#include <arpa/inet.h>      /* for inet_ntoa in x86_64 */
 #else
 #include <winsock2.h>
 #include <Ws2tcpip.h>
